@@ -8,6 +8,7 @@
 
 #include <atomic>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 
 #include <rex/hook.h>
@@ -630,4 +631,42 @@ REX_HOOK_RAW(sub_8279FAA8) {
     }
   }
   __imp__sub_8279FAA8(ctx, base);
+}
+
+// "Restart now" in the menu (doa4_menu.cpp) starts the new instance with
+// DOA4_WAIT_PID = the old one's pid. The new instance waits here (OnPreSetup,
+// before its window, save data and shader cache) until the old one has exited,
+// up to 15 s (the old one's shutdown watchdog ends it after 5 s).
+extern "C" void doa4_wait_for_previous_instance() {
+  char text[32];
+  DWORD length = GetEnvironmentVariableA("DOA4_WAIT_PID", text, sizeof(text));
+  if (length == 0 || length >= sizeof(text)) return;
+  SetEnvironmentVariableA("DOA4_WAIT_PID", nullptr);  // not for our own children
+  DWORD pid = std::strtoul(text, nullptr, 10);
+  HANDLE process = OpenProcess(SYNCHRONIZE, FALSE, pid);
+  if (!process) return;  // already gone
+  DWORD result = WaitForSingleObject(process, 15000);
+  CloseHandle(process);
+  REXLOG_INFO("[doa4][LIFE] previous instance {} {}", pid,
+              result == WAIT_OBJECT_0 ? "has exited" : "still running after 15 s; starting anyway");
+}
+
+// Shutdown watchdog. ReXGlue's teardown sometimes deadlocks in SDL audio
+// shutdown (SDL_DestroyAudioStream waits for the SDL audio thread, which,
+// like other exiting threads, waits forever on the Windows loader lock), so
+// the process outlives its window. Seen in 5 of 6 window closes on the
+// unmodified v0.8.0 build. The guest has stopped by the time this is armed,
+// so if teardown has not finished after 5 s the process is ended outright
+// (TerminateProcess: ExitProcess would need the same loader lock).
+extern "C" void doa4_arm_shutdown_watchdog() {
+  REXLOG_INFO("[doa4][LIFE] shutdown watchdog armed (5 s)");
+  HANDLE thread = CreateThread(
+      nullptr, 0,
+      [](LPVOID) -> DWORD {
+        Sleep(5000);
+        TerminateProcess(GetCurrentProcess(), 0);
+        return 0;
+      },
+      nullptr, 0, nullptr);
+  if (thread) CloseHandle(thread);
 }
