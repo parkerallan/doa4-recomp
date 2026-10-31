@@ -16,7 +16,16 @@ set(DEADORALIVE4_SOURCES
     src/doa4_app_hooks.cpp
     src/doa4_debug_hooks.cpp
     src/doa4_diag_overlay.cpp
+    src/doa4_config.cpp
+    src/doa4_menu.cpp
+    src/doa4_unlocks.cpp
+    src/doa4_tweaks.cpp
+    src/doa4_backup.cpp
+    src/doa4_extras.cpp
+    src/doa4_cvars.cpp
+    src/doa4_graphics.cpp
     src/doa4_lowmem.cpp
+    src/doa4_input_block.cpp
 )
 
 if(WIN32)

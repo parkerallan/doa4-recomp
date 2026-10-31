@@ -8,6 +8,7 @@
 
 #include <atomic>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 
 #include <rex/hook.h>
@@ -632,6 +633,24 @@ REX_HOOK_RAW(sub_8279FAA8) {
   __imp__sub_8279FAA8(ctx, base);
 }
 
+// "Restart now" in the menu (doa4_menu.cpp) starts the new instance with
+// DOA4_WAIT_PID = the old one's pid. The new instance waits here (OnPreSetup,
+// before its window, save data and shader cache) until the old one has exited,
+// up to 15 s (the old one's shutdown watchdog ends it after 5 s).
+extern "C" void doa4_wait_for_previous_instance() {
+  char text[32];
+  DWORD length = GetEnvironmentVariableA("DOA4_WAIT_PID", text, sizeof(text));
+  if (length == 0 || length >= sizeof(text)) return;
+  SetEnvironmentVariableA("DOA4_WAIT_PID", nullptr);  // not for our own children
+  DWORD pid = std::strtoul(text, nullptr, 10);
+  HANDLE process = OpenProcess(SYNCHRONIZE, FALSE, pid);
+  if (!process) return;  // already gone
+  DWORD result = WaitForSingleObject(process, 15000);
+  CloseHandle(process);
+  REXLOG_INFO("[doa4][LIFE] previous instance {} {}", pid,
+              result == WAIT_OBJECT_0 ? "has exited" : "still running after 15 s; starting anyway");
+}
+
 // Shutdown watchdog. ReXGlue's teardown sometimes deadlocks in SDL audio
 // shutdown (SDL_DestroyAudioStream waits for the SDL audio thread, which,
 // like other exiting threads, waits forever on the Windows loader lock), so
@@ -650,4 +669,66 @@ extern "C" void doa4_arm_shutdown_watchdog() {
       },
       nullptr, 0, nullptr);
   if (thread) CloseHandle(thread);
+}
+
+// ===========================================================================
+// Escape menu: the game reads an untouched controller while the menu is open.
+//
+// The game reads every pad through sub_82792040 (XInputGetState wrapper:
+// r3 = user index, r4 = guest X_INPUT_STATE*, tail-calls XamInputGetState) and
+// its menu keystrokes (VK_PAD_* presses) through sub_82792068 (XInputGetKeystroke
+// wrapper: r3 = user index, r4 = flags, r5 = guest X_INPUT_KEYSTROKE*). The
+// unmodified SDK has no "block guest input" switch for an app's own dialog, so
+// both wrappers are hooked here. While the menu is open the state is blanked
+// (doa4_input_block.h) and queued keystrokes are read and dropped, so a button
+// pressed in the menu does not act in the game when it closes.
+// ===========================================================================
+#include "doa4_input_block.h"
+
+namespace {
+std::atomic<bool> g_guest_input_blocked{false};
+std::mutex g_pad_blocker_mutex;
+doa4::input_block::PadBlocker g_pad_blocker;
+constexpr uint32_t kErrorEmpty = 0x10D2;  // X_ERROR_EMPTY
+}  // namespace
+
+extern "C" void doa4_set_guest_input_blocked(bool blocked) {
+  g_guest_input_blocked.store(blocked, std::memory_order_release);
+}
+
+extern "C" {
+REX_EXTERN(__imp__sub_82792040);
+REX_EXTERN(__imp__sub_82792068);
+}
+
+REX_HOOK_RAW(sub_82792040) {
+  const uint32_t user_index = ctx.r3.u32;
+  const uint32_t state = ctx.r4.u32;
+  __imp__sub_82792040(ctx, base);
+  const bool blocked = g_guest_input_blocked.load(std::memory_order_acquire);
+  std::lock_guard<std::mutex> lock(g_pad_blocker_mutex);
+  static int logged = -1;  // the hook is live, and each change of state (under the lock)
+  if (logged != int(blocked)) {
+    logged = int(blocked);
+    REXLOG_INFO("[doa4][UI] game pad reads {}", blocked ? "blocked (menu open)" : "pass through");
+  }
+  if (ctx.r3.u32 != 0 || state == 0) return;  // only a filled state (X_ERROR_SUCCESS)
+  g_pad_blocker.Filter(user_index, blocked, base + state);
+}
+
+REX_HOOK_RAW(sub_82792068) {
+  if (!g_guest_input_blocked.load(std::memory_order_acquire)) {
+    __imp__sub_82792068(ctx, base);
+    return;
+  }
+  const uint64_t r3 = ctx.r3.u64, r4 = ctx.r4.u64, r5 = ctx.r5.u64;
+  for (int i = 0; i < 64; ++i) {  // drain the queue; the game gets none of it
+    ctx.r3.u64 = r3;
+    ctx.r4.u64 = r4;
+    ctx.r5.u64 = r5;
+    __imp__sub_82792068(ctx, base);
+    if (ctx.r3.u32 != 0) break;
+  }
+  if (uint32_t(r5) != 0) std::memset(base + uint32_t(r5), 0, 8);  // X_INPUT_KEYSTROKE
+  ctx.r3.u64 = kErrorEmpty;
 }
