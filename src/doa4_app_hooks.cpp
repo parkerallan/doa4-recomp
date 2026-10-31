@@ -631,3 +631,23 @@ REX_HOOK_RAW(sub_8279FAA8) {
   }
   __imp__sub_8279FAA8(ctx, base);
 }
+
+// Shutdown watchdog. ReXGlue's teardown sometimes deadlocks in SDL audio
+// shutdown (SDL_DestroyAudioStream waits for the SDL audio thread, which,
+// like other exiting threads, waits forever on the Windows loader lock), so
+// the process outlives its window. Seen in 5 of 6 window closes on the
+// unmodified v0.8.0 build. The guest has stopped by the time this is armed,
+// so if teardown has not finished after 5 s the process is ended outright
+// (TerminateProcess: ExitProcess would need the same loader lock).
+extern "C" void doa4_arm_shutdown_watchdog() {
+  REXLOG_INFO("[doa4][LIFE] shutdown watchdog armed (5 s)");
+  HANDLE thread = CreateThread(
+      nullptr, 0,
+      [](LPVOID) -> DWORD {
+        Sleep(5000);
+        TerminateProcess(GetCurrentProcess(), 0);
+        return 0;
+      },
+      nullptr, 0, nullptr);
+  if (thread) CloseHandle(thread);
+}

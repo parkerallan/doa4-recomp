@@ -1,0 +1,7 @@
+// Windows resources of dead_or_alive_4.exe.
+//
+// MAINICON is the icon the SDK's window class loads (rexglue-sdk
+// src/ui/window_win.cpp: LoadIconW(hinstance, L"MAINICON")); Windows also
+// shows it for the exe in Explorer, the taskbar and Task Manager.
+
+MAINICON ICON "../assets/doa4.ico"

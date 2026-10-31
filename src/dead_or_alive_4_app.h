@@ -7,8 +7,10 @@
 #include <atomic>
 #include <algorithm>
 #include <chrono>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <memory>
 #include <mutex>
 #include <regex>
 #include <string>
@@ -24,6 +26,7 @@
 #include <rex/logging.h>
 #include <rex/memory.h>
 #include <rex/rex_app.h>
+#include <rex/ui/keybinds.h>
 #include <rex/runtime.h>
 #include <rex/system/kernel_state.h>
 #include <rex/system/thread_state.h>
@@ -35,6 +38,8 @@
 #include "doa4_lowmem.h"
 
 REXCVAR_DECLARE(bool, log_noisy);
+
+extern "C" void doa4_arm_shutdown_watchdog();  // doa4_app_hooks.cpp
 
 class DeadOrAlive4App : public rex::ReXApp {
  public:
@@ -104,19 +109,39 @@ class DeadOrAlive4App : public rex::ReXApp {
                 thread ? thread->thread_id() : 0u);
   }
   void OnShutdown() override {
+    doa4_arm_shutdown_watchdog();
+    rex::ui::UnregisterBind("bind_doa4_diag");
+    diag_overlay_.reset();  // before the base app destroys the ImGui drawer
     snap_stop_.store(true, std::memory_order_release);
     if (snap_thread_.joinable()) snap_thread_.join();
   }
   // void OnCreateDialogs(rex::ui::ImGuiDrawer* drawer) override {}
 
+  // The diagnostics overlay is off until F6 (bind_doa4_diag) or
+  // DOA4_DIAG_OVERLAY=1 turns it on: while any ImGui dialog exists the
+  // presenter paints from the UI thread (every guest frame waits for a UI
+  // repaint, and the UI repaints continuously), instead of presenting each
+  // frame straight from the GPU thread.
   void OnCreateDialogs(rex::ui::ImGuiDrawer* drawer) override {
     if (!drawer) return;
-    // Dialog retains itself on the drawer; raw new is the documented pattern.
-    new doa4::DiagOverlayDialog(drawer);
-    REXLOG_INFO("[doa4][UI] DiagOverlayDialog attached");
+    rex::ui::RegisterBind("bind_doa4_diag", "F6", "Toggle DOA4 diagnostics overlay",
+                          [this, drawer] { ToggleDiagOverlay(drawer); });
+    const char* env = std::getenv("DOA4_DIAG_OVERLAY");
+    if (env && env[0] == '1') ToggleDiagOverlay(drawer);
+  }
+
+  void ToggleDiagOverlay(rex::ui::ImGuiDrawer* drawer) {
+    if (diag_overlay_) {
+      diag_overlay_.reset();
+      REXLOG_INFO("[doa4][UI] DiagOverlayDialog closed");
+    } else {
+      diag_overlay_ = std::make_unique<doa4::DiagOverlayDialog>(drawer);
+      REXLOG_INFO("[doa4][UI] DiagOverlayDialog attached");
+    }
   }
 
  private:
+  std::unique_ptr<doa4::DiagOverlayDialog> diag_overlay_;
   std::atomic<bool> snap_stop_{false};
   std::thread snap_thread_;
 
@@ -260,14 +285,21 @@ class DeadOrAlive4App : public rex::ReXApp {
       // 39-line-per-round flood. The full per-thread dump runs ONCE on round 0
       // to confirm every guest thread spun up, and again on demand when the
       // running-thread count collapses (likely-hang signal).
+      // Sleeps end early once OnShutdown sets snap_stop_ (it joins this
+      // thread, and a plain 5 s sleep held every window close for up to 5 s).
+      auto nap = [this] {
+        for (int i = 0; i < 50 && !snap_stop_.load(std::memory_order_acquire); ++i) {
+          std::this_thread::sleep_for(100ms);
+        }
+      };
       size_t prev_running = 0;
       for (int round = 0; round < 240 && !snap_stop_.load(std::memory_order_acquire); ++round) {
         auto* ks = rex::system::kernel_state();
         auto* ot = ks ? ks->object_table() : nullptr;
-        if (!ot) { std::this_thread::sleep_for(5000ms); continue; }
+        if (!ot) { nap(); continue; }
         std::vector<rex::system::object_ref<rex::system::XThread>> threads;
         try { threads = ot->GetObjectsByType<rex::system::XThread>(); }
-        catch (...) { std::this_thread::sleep_for(5000ms); continue; }
+        catch (...) { nap(); continue; }
 
         uint32_t main_lr = 0;
         size_t guest_total = 0, guest_running = 0;
@@ -302,7 +334,7 @@ class DeadOrAlive4App : public rex::ReXApp {
                       guest_running, guest_total, symbolize(main_lr));
         }
         prev_running = guest_running;
-        std::this_thread::sleep_for(5000ms);
+        nap();
       }
     });
   }

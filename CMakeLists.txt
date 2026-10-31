@@ -20,7 +20,9 @@ set(DEADORALIVE4_SOURCES
 )
 
 if(WIN32)
-    add_executable(dead_or_alive_4 WIN32 ${DEADORALIVE4_SOURCES})
+    # The window, taskbar, Explorer and Task Manager icon (src/dead_or_alive_4.rc).
+    enable_language(RC)
+    add_executable(dead_or_alive_4 WIN32 ${DEADORALIVE4_SOURCES} src/dead_or_alive_4.rc)
 else()
     add_executable(dead_or_alive_4 ${DEADORALIVE4_SOURCES})
 endif()
