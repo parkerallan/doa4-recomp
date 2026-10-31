@@ -25,3 +25,16 @@ else()
 endif()
 
 rexglue_setup_target(dead_or_alive_4)
+
+# Local build fix: the ReXGlue SDK at v0.8.0 does not pass ImGui's headers on to the
+# game target (src/doa4_diag_overlay.cpp includes <imgui.h>); ImGui itself is
+# already compiled into the SDK's UI library.
+if(TARGET imgui)
+    target_include_directories(dead_or_alive_4 PRIVATE $<TARGET_PROPERTY:imgui,INTERFACE_INCLUDE_DIRECTORIES>)
+endif()
+# Local build fix: with REXSDK_DIR (the SDK built from source alongside the game), the
+# SDK's generated headers (rex/version.h) sit in its build folder, which the game
+# target's own SDK sources (ui/rex_app.cpp) do not search.
+if(REXSDK_DIR)
+    target_include_directories(dead_or_alive_4 PRIVATE ${CMAKE_BINARY_DIR}/rexglue-sdk/include)
+endif()
