@@ -32,6 +32,7 @@
 #include <rex/system/xthread.h>
 
 #include "doa4_diag_overlay.h"
+#include "doa4_lowmem.h"
 
 REXCVAR_DECLARE(bool, log_noisy);
 
@@ -87,6 +88,9 @@ class DeadOrAlive4App : public rex::ReXApp {
   void OnPostLoadXexImage() override {
     REXLOG_INFO("[doa4][LIFE] OnPostLoadXexImage: XEX mapped into guest memory");
     DumpGuestStrings();
+    // Before any guest code allocates: keeps fighter data out of low addresses,
+    // where the game's relocation test skips tables (Ryu Hayabusa / Brad Wong crash).
+    doa4::ReserveLowGuestMemory(runtime() ? runtime()->memory() : nullptr);
   }
   void OnPreLaunchModule() override {
     REXLOG_INFO("[doa4][LIFE] OnPreLaunchModule: about to spawn main guest thread");

@@ -31,3 +31,11 @@
 0x827DE3C0 = {}
 # Call to invalid/unregistered function at runtime (log 042, ~4min into gameplay)
 0x823A7778 = {}
+# Call to invalid/unregistered function at runtime (suits_play log 004, Christie throw off the Safari cliff;
+# a call stub between 0x8257FE00 and 0x8257FE20)
+0x8257FE10 = {}
+# Same shape as 0x8257FE10: an unclaimed 16-byte slot right after a call stub, found by a scan of the
+# generated code (beside the earlier crash addresses 0x82550830 and 0x825B4A78)
+0x82550820 = {}
+0x825B4A68 = {}
+0x827F3F80 = {}

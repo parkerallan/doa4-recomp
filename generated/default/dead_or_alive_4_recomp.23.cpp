@@ -17568,6 +17568,19 @@ DEFINE_REX_FUNC(sub_8257FE00) {
 	return;
 }
 
+DEFINE_REX_FUNC(sub_8257FE10) {
+	REX_FUNC_PROLOGUE();
+	PPCRegister temp{};
+	// lis r11,-32212
+	ctx.r11.s64 = -2111045632;
+	// lfs f1,-14576(r11)
+	ctx.fpscr.disableFlushMode();
+	temp.u32 = REX_LOAD_U32(ctx.r11.u32 + -14576);
+	ctx.f1.f64 = double(temp.f32);
+	// blr 
+	return;
+}
+
 DEFINE_REX_FUNC(sub_8257FE20) {
 	REX_FUNC_PROLOGUE();
 	PPCRegister temp{};
